@@ -1,5 +1,7 @@
 Changes from original Nagios Exchange version:
 
+2018-05-04:
+
 1: Fix a few typos
 
 2: Tweak voltage and temperature tests
@@ -9,3 +11,5 @@ Changes from original Nagios Exchange version:
 4: Return nagios status code corresponding to the worst condition flagged
 
 5: Implement the -v option to output detailed info (only useful when debugging)
+
+6: Return disk failures as Critical errors, not warnings
