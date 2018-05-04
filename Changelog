@@ -13,3 +13,5 @@ Changes from original Nagios Exchange version:
 5: Implement the -v option to output detailed info (only useful when debugging)
 
 6: Return disk failures as Critical errors, not warnings
+
+7: Increase ssh connection timeout to 60 seconds
