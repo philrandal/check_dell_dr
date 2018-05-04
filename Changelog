@@ -1,0 +1,11 @@
+Changes from original Nagios Exchange version:
+
+1: Fix a few typos
+
+2: Tweak voltage and temperature tests
+
+3: Report all criticals, warnings, and unknowns in full in the plugin output
+
+4: Return nagios status code corresponding to the worst condition flagged
+
+5: Implement the -v option to output detailed info (only useful when debugging)
