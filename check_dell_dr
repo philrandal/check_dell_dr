@@ -1,0 +1,526 @@
+#!/bin/bash
+
+################################################################################
+# Nagios plugin, connects to Dell DR-series and fetches status with SSH        #
+# Author: Tomas Stanislawski (http://www.hkr.se/)                              #
+# Requires: sshpass                                                            #
+################################################################################
+
+# Constants
+version="Version 1.0"
+author="(c) 2015-3000 Tomas Stanislawski(tomas.stanislawski@hkr.se)"
+progname=$0
+
+# Exit codes
+state_ok=0
+state_warning=1
+state_critical=2
+state_unknown=3
+exitCode=$state_ok
+
+# Status strings
+infoWarning="OK"
+infoReport=""
+infoNagios=""
+infoLongreport=""
+
+# Misc variables
+oldifs="$IFS"
+sshpass='/usr/bin/sshpass'
+sshopt1='-p'
+sshpassword=''
+sshhostname=''
+sshopt2='ssh -o ConnectTimeout=10 '
+
+sshoptions='system --show --config --hardware --storage'
+sshoptionsinfo='system --show --config --storage'
+sshoptionshardware='system --show --hardware --storage'
+sshoptionsstats='stats --system'
+
+# Dell DR variables
+tempWarning="40"
+tempCritical="45"
+voltLow="100"
+voltHigh="240"
+usageWarn="95"
+usageCrit="98"
+
+# Regular expressions to weed out info from unit output
+re_productname='(Product[[:blank:]]Name)[[:blank:]]+:[[:blank:]]([a-zA-Z0-9[:blank:]\.\:]+)'
+re_systemname='(System[[:blank:]]Name)[[:blank:]]+:[[:blank:]]([a-zA-Z0-9[:blank:]\.\:]+)'
+re_servicetag='(Service[[:blank:]]Tag)[[:blank:]]+:[[:blank:]]([a-zA-Z0-9[:blank:]\.\:]+)'
+re_systemstate='(System[[:blank:]]State)[[:blank:]]+:[[:blank:]]([a-zA-Z0-9[:blank:]\.\:]+)'
+re_version='(Version)[[:blank:]]+:[[:blank:]]([a-zA-Z0-9[:blank:]\.\:]{6,15})'
+re_reason='(Reason)[[:blank:]]+:[[:blank:]]([a-zA-Z0-9[:blank:]\.\:\/]+)'
+re_storagecontroller='(Storage[[:blank:]]Controller)[[:blank:]]+(PERC[[:blank:]]H[0-9]{0,4})[[:blank:]]+(HDB[[:blank:]]ST[0-9]{2})[[:blank:]]+([a-z]+)[[:blank:]]+([0-9]+)'
+re_virtualdisk='(Virtual[[:blank:]]Disk)[[:blank:]]+(HDB[[:blank:]]VD[0-9]{0,2})[[:blank:]]+([a-z]+)[[:blank:]]+([a-z]+)[[:blank:]]+([0-9]+)[[:blank:]]+([0-9]+)[[:blank:]]+([0-9]+)[[:blank:]]+([[:blank:]a-zA-Z0-9]+)'
+re_physicaldisk='(Physical[[:blank:]]Disk)[[:blank:]]+(HDB[[:blank:]]PD[0-9]{2})[[:blank:]]+([a-z]+)[[:blank:]]+([a-z]+)[[:blank:]]+([a-z]+)[[:blank:]]+([0-9]+)[[:blank:]]+([a-zA-Z0-9]+)[[:blank:]]+(yes|no)[[:blank:]]+([0-9]{0,4}[[:blank:]][TG]iB)[[:blank:]]+([a-zA-Z]+)'
+re_battery='(Battery)[[:blank:]]+(HDB[[:blank:]]Ba[0-9]{2})[[:blank:]]+([a-z]+)[[:blank:]]+([a-z]+)'
+re_storagecache='(Storage[[:blank:]]Cache)[[:blank:]]+(HDB[[:blank:]]Ca[0-9]{2})[[:blank:]]+([a-z]+)'
+re_powersupply='(Power[[:blank:]]Supply)[[:blank:]]+(HDB[[:blank:]]PS[0-9]{2})[[:blank:]]+([a-z]+)[[:blank:]]+([a-zA-Z0-9[:blank:]]+)'
+re_temperature='(Temperature[[:blank:]]Probe)[[:blank:]]+(HDB[[:blank:]]TP[0-9]{2})[[:blank:]]+([a-z]+)[[:blank:]]+([0-9\.]+)'
+re_fan='(Fan)[[:blank:]]+(HDB[[:blank:]]Fa[0-9]{2})[[:blank:]]+([a-z]+)[[:blank:]]+([0-9]+)[[:blank:]]+([a-zA-Z0-9[:blank:]]+)'
+re_voltage='(Voltage[[:blank:]]Probe)[[:blank:]]+(HDB[[:blank:]]VP[0-9]{2})[[:blank:]]+([a-z]+)[[:blank:]]+([0-9\.]+)[[:blank:]]+([a-zA-Z0-9[:blank:]\.]+)'
+re_srvhwcontroller='(Srvhw[[:blank:]]Storage[[:blank:]]Controller)[[:blank:]]+(HDB[[:blank:]]ST[0-9]{2})[[:blank:]]+([a-z]+)'
+re_nic='(NIC)[[:blank:]]+(HDB[[:blank:]]Ni[0-9]{2})[[:blank:]]+(Connected|Not[[:blank:]]Connected)[[:blank:]]+([a-z[:blank:]]{0,12})[[:blank:]]+([0-9]{0,2}[[:blank:]][GM]bps)'
+re_cpu='(CPU)[[:blank:]]+(HDB[[:blank:]]CP[0-9]{2})[[:blank:]]+([a-z]+)'
+re_dimm='(DIMM)[[:blank:]]+(HDB[[:blank:]]Di[0-9]{2})[[:blank:]]+([a-z]+)[[:blank:]]+(DIMM_[A-Z0-9]{2})'
+re_nvram='(NVRAM)[[:blank:]]+(HDB[[:blank:]]NV[0-9]{2})[[:blank:]]+([a-z]+)[[:blank:]]+([0-9]+)[[:blank:]]+([0-9]+)[[:blank:]]+([a-z]+)[[:blank:]]+([a-z]+)[[:blank:]]+([a-zA-Z0-9]+)[[:blank:]]+([a-zA-Z0-9]+)[[:blank:]]+(.*)'
+re_supercap='(Super[[:blank:]]Cap)[[:blank:]]+(HDB[[:blank:]]SC[0-9]{2})[[:blank:]]+([a-z]+)[[:blank:]]+([a-z]+)[[:blank:]]+([0-9\.]+)[[:blank:]]+([0-9\.]+)'
+re_storageboot='(Boot)[[:blank:]]+([0-9\.]+[[:blank:]][MGT}]iB)[[:blank:]]+(Yes|No)[[:blank:]]+([0-9]{0,2})[[:blank:]]+([-0-9\.%]+)[[:blank:]]+([a-z]+)'
+re_storageint='(Internal)[[:blank:]]+([0-9\.]+[[:blank:]][MGT}]iB)[[:blank:]]+(Yes|No)[[:blank:]]+([0-9]{0,2})[[:blank:]]+([-0-9\.%]+)[[:blank:]]+([a-z]+)'
+re_capacityused='(Capacity[[:blank:]]Used)[[:blank:]]+:[[:blank:]]([0-9\.]{1,8}+)[[:blank:]]'
+re_capacityfree='(Capacity[[:blank:]]Free)[[:blank:]]+:[[:blank:]]([0-9\.]{1,8}+)[[:blank:]]'
+re_readth='(Read[[:blank:]]Throughput)[[:blank:]]+:[[:blank:]]([0-9\.]{1,8}+)[[:blank:]]'
+re_writeth='(Write[[:blank:]]Throughput)[[:blank:]]+:[[:blank:]]([0-9\.]{1,8}+)[[:blank:]]'
+re_currentfiles='(Current[[:blank:]]Files)[[:blank:]]+:[[:blank:]]([0-9]+)'
+re_currentbytes='(Current[[:blank:]]Bytes)[[:blank:]]+:[[:blank:]]([0-9]+)'
+re_totalsavings='(Total[[:blank:]]Savings)[[:blank:]]+:[[:blank:]]([0-9\.]+)'
+
+# Helper functions #############################################################
+
+function print_revision {
+   # Print the revision number
+   echo "$PROGNAME - $VERSION"
+}
+
+function print_usage {
+   # Print a short usage statement
+   echo "Usage: $PROGNAME [-v] -P password -H username@host [-T test type]"
+}
+
+function print_help {
+   # Print detailed help information
+   print_revision
+   printf "$AUTHOR\nPerform Dell DR-series checks\n\n"
+   print_usage
+
+   /bin/cat <<__EOT
+
+Options:
+-h
+   Print detailed help screen
+-H
+   Dell DR-series host username@host
+-P
+   Dell DR-series password
+-T
+   Test type. Can be one of following
+     info - General information about the unit (default)
+     hardware - Detailed information about the units drives
+     stats - Statistics of the storage (always returns OK)
+__EOT
+}
+
+# Main #########################################################################
+
+# Verbosity level
+verbosity=0
+
+# Main functions ###############################################################
+
+function get_dr_hardware {
+
+  # Query for general information
+  queryAll=$($sshpass $sshopt1 $sshpassword $sshopt2 $sshhostname $sshoptionshardware)
+  
+  # If query is empty, return error
+  if [[ -z $queryAll ]]; then
+    infoWarning="UNKNOWN"
+    infoReport="Query returned a timeout or error"
+    exitCode=$state_unknown
+  else
+  # Else loop through lines and check them with previously defined regexps
+
+    infoWarning="OK No hardware faults detected. See plugin output and graphs for more information."
+    nicCount=0
+
+    while read line
+    do
+      if [[ $line =~ $re_storagecontroller ]]; then
+        varStoragecontrollertype="${BASH_REMATCH[2]}"
+        varStoragecontrollerhealth="${BASH_REMATCH[4]}"
+        infoLongreport="$infoLongreport""Storage Controller $varStoragecontrollertype: $varStoragecontrollerhealth\n"
+        if [ "$varStoragecontrollerhealth" != "optimal" ]
+        then
+          exitCode=$state_warning
+          infoWarning="WARNING $varStoragecontrollertype health is $varStoragecontrollerhealth"
+        fi
+      elif [[ $line =~ $re_virtualdisk ]]; then
+        varVirtualdiskname="${BASH_REMATCH[8]}"
+        varVirtualdiskhealth="${BASH_REMATCH[4]}"
+        varVirtualdiskstate="${BASH_REMATCH[3]}"
+        infoLongreport="$infoLongreport""Virtual disk $varVirtualdiskname, state: $varVirtualdiskstate, health: $varVirtualdiskhealth\n"
+        if [ "$varVirtualdiskhealth" != "optimal" ]; then
+          exitCode=$state_warning
+          infoWarning="WARNING $varVirtualdiskname health is $varVirtualdiskhealth"
+        fi
+        if [ "$varVirtualdiskstate" != "ready" ]; then
+          exitCode=$state_warning
+          infoWarning="WARNING $varVirtualdiskname state is $varVirtualdiskstate"
+        fi
+      elif [[ $line =~ $re_physicaldisk ]]; then
+        varPhysicaldiskslot="${BASH_REMATCH[6]}"
+        varPhysicaldiskhealth="${BASH_REMATCH[5]}"
+        varPhysicaldiskstate="${BASH_REMATCH[3]}"
+        varPhysicaldiskserial="${BASH_REMATCH[7]}"
+        varPhysicaldiskalert="${BASH_REMATCH[8]}"
+        varPhysicaldisksize="${BASH_REMATCH[9]}"
+        infoLongreport="$infoLongreport""Physical disk $varPhysicaldiskslot, serial: $varPhysicaldiskserial, size: $varPhysicaldisksize, state: $varPhysicaldiskstate, health: $varPhysicaldiskhealth, alert: $varPhysicaldiskalert\n"
+        if [ "$varPhysicaldiskhealth" != "optimal" ]; then
+          exitCode=$state_warning
+          infoWarning="WARNING Disk $varPhysicaldiskslot health is $varPhysicaldiskhealth" 
+        fi
+        if [[ ! $varPhysicaldiskstate =~ ^(ready|online)$ ]]; then
+          exitCode=$state_warning
+          infoWarning="WARNING Disk $varPhysicaldiskslot state is $varPhysicaldiskstate"
+        fi
+      elif [[ $line =~ $re_battery ]]; then
+        varBatteryname="${BASH_REMATCH[2]}"
+        varBatteryhealth="${BASH_REMATCH[3]}"
+        varBatterystate="${BASH_REMATCH[4]}"
+        infoLongreport="$infoLongreport""Battery $varBatteryname, state: $varBatterystate, health: $varBatteryhealth\n"
+        if [ "$varBatteryhealth" != "optimal" ]; then
+          exitCode=$state_warning
+          infoWarning="WARNING Battery $varBatteryname health is $varBatteryhealth"
+        fi
+        if [ "$varBatterystate" != "ready" ]; then
+          exitCode=$state_warning
+          infoWarning="WARNING Battery $varBatteryname state is $varBatterystate"
+        fi
+      elif [[ $line =~ $re_storagecache ]]; then
+        varStoragecachename="${BASH_REMATCH[2]}"
+        varStoragecachehealth="${BASH_REMATCH[3]}"
+        infoLongreport="$infoLongreport""Storage Cache $varStoragecachename, health: $varStoragecachehealth\n"
+        if [ "$varStoragecachehealth" != "optimal" ]; then
+          exitCode=$state_warning
+          infoWarning="WARNING Storage Cache $varStoragecachename health is $varStoragecachehealth"
+        fi
+      elif [[ $line =~ $re_powersupply ]]; then
+        varPowersupplyname="${BASH_REMATCH[2]}"
+        varPowersupplyhealth="${BASH_REMATCH[3]}"
+        infoLongreport="$infoLongreport""Power Supply $varPowersupplyname, health: $varPowersupplyhealth\n"
+        if [ "$varPowersupplyhealth" != "optimal" ]; then
+          exitCode=$state_warning
+          infoWarning="WARNING Power Supply $varPowersupplyname health is $varPowersupplyhealth"
+        fi
+      elif [[ $line =~ $re_temperature ]]; then
+        varTemperaturename="${BASH_REMATCH[2]}"
+        varTemperaturehealth="${BASH_REMATCH[3]}"
+        varTemperaturevalue="${BASH_REMATCH[4]}"
+        infoLongreport="$infoLongreport""Temperature Probe $varTemperaturename, health: $varTemperaturehealth, reading: $varTemperaturevalue\n"
+        infoNagios="$infoNagios""'Temperature probe $varTemperaturename'=$varTemperaturevalue;$tempWarning;$tempCritical "
+        if [ "$varTemperaturehealth" != "optimal" ]; then
+          exitCode=$state_warning
+          infoWarning="WARNING Temperature Probe $varTemperaturename health is $varTemperaturehealth"
+        fi
+        if [[ $(echo "($varTemperaturevalue*10)/1" | bc) -ge $(echo "($tempWarning*10)/1" | bc) ]]; then
+          exitCode=$state_warning
+          infoWarning="WARNING Temperature Probe $varTemperaturename reading is $varTemperaturevalue"
+        fi
+        if [[ $(echo "($varTemperaturevalue*10)/1" | bc) -ge $(echo "($tempCritical*10)/1" | bc) ]]; then
+          exitCode=$state_critical
+          infoWarning="CRITICAL Temperature Probe $varTemperaturename reading is $varTemperaturevalue"
+        fi
+      elif [[ $line =~ $re_voltage ]]; then
+        varVoltagename="${BASH_REMATCH[5]}"
+        varVoltagehealth="${BASH_REMATCH[3]}"
+        varVoltagevalue="${BASH_REMATCH[4]}"
+
+        if [[ $varVoltagename =~ ^(PS[1-2][[:blank:]]Voltage[[:blank:]][1-2])$ ]]; then
+          infoLongreport="$infoLongreport""$varVoltagename, health: $varVoltagehealth, reading: $varVoltagevalue\n"
+          infoNagios="$infoNagios""'$varVoltagename'=$varVoltagevalue;$voltLow:$voltHigh; "
+          if [[ $(echo "($varVoltagevalue*100)/1" | bc) -lt $(echo "($voltLow*100)/1" | bc) ]]; then
+            exitCode=$state_warning
+            infoWarning="WARNING $varVoltagename reading is $varVoltagevalue"
+          fi
+          if [[ $(echo "($varVoltagevalue*100)/1" | bc) -ge $(echo "($voltHigh*100)/1" | bc) ]]; then
+            exitCode=$state_warning
+            infoWarning="WARNING $varVoltagename reading is $varVoltagevalue"
+          fi
+        fi
+        if [ "$varVoltagehealth" != "optimal" ]; then
+          exitCode=$state_warning
+          infoWarning="WARNING Voltage Probe $varVoltagename health is $varVoltagehealth"
+        fi
+      elif [[ $line =~ $re_srvhwcontroller ]]; then
+        varControllername="${BASH_REMATCH[2]}"
+        varControllerhealth="${BASH_REMATCH[3]}"
+        infoLongreport="$infoLongreport""Storage Controller $varControllername, health: $varControllerhealth\n"
+        if [ "$varControllerhealth" != "optimal" ]; then
+          exitCode=$state_warning
+          infoWarning="WARNING Storage Controller $varControllername health is $varControllerhealth"
+        fi
+      elif [[ $line =~ $re_nic ]]; then
+        varNicname="${BASH_REMATCH[2]}"
+        varNichealth="${BASH_REMATCH[3]}"
+        varNicspeed="${BASH_REMATCH[5]}"
+        infoLongreport="$infoLongreport""NIC $varNicname, health: $varNichealth, speed: $varNicspeed\n"
+        if [[ $varNichealth = Connected ]]; then nicCount=$(($nicCount+1)); fi
+      elif [[ $line =~ $re_fan ]]; then
+        varFanname="${BASH_REMATCH[5]}"
+        varFanhealth="${BASH_REMATCH[3]}"
+        varFanspeed="${BASH_REMATCH[4]}"
+        infoLongreport="$infoLongreport""$varFanname, health: $varFanhealth, speed: $varFanspeed\n"
+        infoNagios="$infoNagios""'$varFanname'=$varFanspeed;; "
+        if [ "$varFanhealth" != "optimal" ]; then
+          exitCode=$state_warning
+          infoWarning="WARNING Fan $varFanname health is $varFanhealth"
+        fi
+      elif [[ $line =~ $re_cpu ]]; then
+        varCpuname="${BASH_REMATCH[2]}"
+        varCpuhealth="${BASH_REMATCH[3]}"
+        infoLongreport="$infoLongreport""CPU $varCpuname, health: $varCpuhealth\n"
+        if [ "$varCpuhealth" != "optimal" ]; then
+          exitCode=$state_warning
+          infoWarning="WARNING CPU $varCpuname health is $varCpuhealth"
+        fi
+      elif [[ $line =~ $re_dimm ]]; then
+        varDimmname="${BASH_REMATCH[4]}"
+        varDimmhealth="${BASH_REMATCH[3]}"
+        infoLongreport="$infoLongreport""DIMM $varDimmname, health: $varDimmhealth\n"
+        if [ "$varDimmhealth" != "optimal" ]; then
+          exitCode=$state_warning
+          infoWarning="WARNING DIMM $varDimmname health is $varDimmhealth"
+        fi
+      elif [[ $line =~ $re_nvram ]]; then
+        varNvramtemp="${BASH_REMATCH[5]}"
+        varNvramerrors="${BASH_REMATCH[4]}"
+        varNvramhealth="${BASH_REMATCH[3]}"
+        varSsdstate="${BASH_REMATCH[6]}"
+        varSsdhealth="${BASH_REMATCH[7]}"
+        infoNagios="$infoNagios""'NVRAM errors'=$varNvramerrors;; 'NVRAM temperature'=$varNvramtemp;; "
+        infoLongreport="$infoLongreport""NVRAM health: $varNvramhealth, errors: $varNvramerrors, temperature: $varNvramtemp\nNVRAM SSD health: $varSsdhealth, state: $varSsdstate\n"
+        if [ "$varNvramhealth" != "optimal" ]; then
+          exitCode=$state_warning
+          infoWarning="WARNING NVRAM health is $varNvramhealth"
+        fi
+        if [ "$varSsdhealth" != "optimal" ]; then
+          exitCode=$state_warning
+          infoWarning="WARNING NVRAM SSD health is $varSsdhealth"
+        fi
+      elif [[ $line =~ $re_version ]]; then
+        varVersion="${BASH_REMATCH[2]}"
+      fi
+    done <<< "$(echo -e "$queryAll" | tr -d '"' | tr -d '%')"
+
+    if [ $nicCount -lt 2 ]; then
+      exitCode=$state_warning
+      infoWarning="WARNING Network redudancy lost, active links $nicCount"
+    fi
+    # Check if any errors found and set states accordingly
+
+    #infoReport="$infoReport""System: $varSystemname $varProductname Version $varVersion, SN: $varServicetag, State: $varSystemstate, Storage: $varStorintsize $varStorintstate, used $varStorintusedpct%%"
+    #infoNagios="'Size MB'=$varStorintsizembytes""MB;;; 'Used MB'=$varStorintusedmbytes""MB;;; 'Used percent'=$varStorintusedpct%%"
+    #infoLongreport="System: $varSystemname\nProduct: $varProductname\nService tag: $varServicetag\nState: $varSystemstate, $varReason\n"
+  fi
+
+  printf "$infoWarning $infoReport"
+  printf '|'
+  printf "$infoNagios\n$infoLongreport"
+
+}
+
+function get_dr_info {
+
+  # Query for general information
+  queryAll=$($sshpass $sshopt1 $sshpassword $sshopt2 $sshhostname $sshoptionsinfo)
+  
+  # If query is empty, return error
+  if [[ -z $queryAll ]]; then
+    infoWarning="UNKNOWN"
+    infoReport="Query returned a timeout or error"
+    exitCode=$state_unknown
+  else
+  # Else loop through lines and check them with previously defined regexps 
+    while read line
+    do
+      if [[ $line =~ $re_productname ]]; then 
+        varProductname="${BASH_REMATCH[2]}"
+      elif [[ $line =~ $re_systemname ]]; then
+        varSystemname="${BASH_REMATCH[2]}"
+      elif [[ $line =~ $re_servicetag ]]; then
+        varServicetag="${BASH_REMATCH[2]}"
+      elif [[ $line =~ $re_reason ]]; then
+        varReason="${BASH_REMATCH[2]}"
+      elif [[ $line =~ $re_systemstate ]]; then
+        varSystemstate="${BASH_REMATCH[2]}"
+      elif [[ $line =~ $re_storageboot ]]; then
+        varStorbootstate="${BASH_REMATCH[6]}"
+      elif [[ $line =~ $re_storageint ]]; then
+        varStorintsize="${BASH_REMATCH[2]}"
+        varStorintraid="${BASH_REMATCH[4]}"
+        varStorintusedpct="${BASH_REMATCH[5]}"
+        varStorintstate="${BASH_REMATCH[6]}"
+        varTmp1=$(echo "$varStorintsize" | sed -e 's/[[:blank:]][TB]iB//g')
+        varStorintsizembytes=$(echo "$varTmp1*1024*1024" | bc)
+        varStorintusedmbytes=$(echo "($varTmp1*1024*1024*$varStorintusedpct)/100" | bc)
+        if [ "$varStorintstate" != "ready" ]; then exitCode=$state_warning; infoWarning="WARNING Internal storage is not ready."; fi
+      elif [[ $line =~ $re_version ]]; then
+        varVersion="${BASH_REMATCH[2]}"
+      fi
+    done <<< "$(echo -e "$queryAll" | tr -d '"' | tr -d '%')"
+
+    # Check if any errors found and set states accordingly
+    if [ "$varSystemstate" != "Operational Mode" ]; then exitCode=$STATE_WARNING; infoWarning="WARNING System state is not in operational mode. Reason: $varReason"; fi
+    if [ "$varStorbootstate" != "ready" ]; then exitCode=$state_warning; infoWarning="WARNING Boot storage is not ready."; fi
+
+    infoReport="$infoReport""System: $varSystemname $varProductname Version $varVersion, SN: $varServicetag, State: $varSystemstate, Storage: $varStorintsize $varStorintstate, used $varStorintusedpct%%"
+    infoNagios="'Size MB'=$varStorintsizembytes""MB;;; 'Used MB'=$varStorintusedmbytes""MB;;; 'Used percent'=$varStorintusedpct%%"
+    infoLongreport="System: $varSystemname\nProduct: $varProductname\nService tag: $varServicetag\nState: $varSystemstate, $varReason\n" 
+  fi
+  
+  printf "$infoWarning $infoReport"
+  printf '|'
+  printf "$infoNagios\n$infoLongreport"
+
+}
+
+function get_dr_stats {
+
+  # Query for general information
+  queryAll=$($sshpass $sshopt1 $sshpassword $sshopt2 $sshhostname $sshoptionsstats)
+
+  # If query is empty, return error
+  if [[ -z $queryAll ]]; then
+    infoWarning="UNKNOWN"
+    infoReport="Query returned a timeout or error"
+    exitCode=$state_unknown
+  else
+  # Else loop through lines and check them with previously defined regexps
+    while read line
+    do
+      if [[ $line =~ $re_capacityused ]]; then
+        varCapacityused=$(echo "(${BASH_REMATCH[2]})/1" | bc)
+      elif [[ $line =~ $re_capacityfree ]]; then
+        varCapacityfree=$(echo "(${BASH_REMATCH[2]})/1" | bc)
+      elif [[ $line =~ $re_readth ]]; then
+        varReadth="${BASH_REMATCH[2]}"
+      elif [[ $line =~ $re_writeth ]]; then
+        varWriteth="${BASH_REMATCH[2]}"
+      elif [[ $line =~ $re_currentfiles ]]; then
+        varCurrentfiles="${BASH_REMATCH[2]}"
+      elif [[ $line =~ $re_currentbytes ]]; then
+        varCurrentbytes=$(echo "(${BASH_REMATCH[2]}/1024/1024/1024)/1" | bc)
+      elif [[ $line =~ $re_totalsavings ]]; then
+        varTotalsavings="${BASH_REMATCH[2]}"
+      fi
+    done <<< "$(echo -e "$queryAll" | tr -d '"' | tr -d '%')"
+
+    # Calculate usage
+    varTotalcapacity=$(echo "$varCapacityfree+$varCapacityused" | bc)
+    varUsagepct=$(echo "scale=2;(100-($varCapacityfree*100/$varTotalcapacity))" | bc -l)
+    if [[ $(echo "($varUsagepct*10)/1" | bc) -ge $(echo "($usageWarn*10)/1" | bc) ]]; then
+      exitCode=$state_warning
+      infoWarning="WARNING Storage usage is $varUsagepct%%"
+    fi
+    if [[ $(echo "($varUsagepct*10)/1" | bc) -ge $(echo "($usageCrit*10)/1" | bc) ]]; then
+      exitCode=$state_critical
+      infoWarning="CRITICAL Storage usage is $varUsagepct%%"
+    fi
+
+    infoReport="$infoReport""Disk total: $varTotalcapacity GB, Disk used: $varCapacityused GB, Disk free: $varCapacityfree GB, Usage: $varUsagepct%%, Active bytes: $varCurrentbytes GB, Total savings: $varTotalsavings%%"
+    infoNagios="'Disk used (GB)'=$varCapacityused;; 'Disk free (GB)'=$varCapacityfree;; 'Usage'=$varUsagepct%%;$usageWarn;$usageCrit 'Active bytes (GB)'=$varCurrentbytes;; 'Total savings'=$varTotalsavings%%;; 'Read throuhgput (MB/s)'=$varReadth;; 'Write throughput (MB/s)'=$varWriteth;;"
+    infoLongreport="Disk used: $varCapacityused GB\nDisk free: $varCapacityfree GB\nActive bytes: $varCurrentbytes GB\nTotal savings: $varTotalsavings%%\nRead throuhgput: $varReadth MB/s\nWrite throughput: $varWriteth MB/s\n"
+  fi
+
+  printf "$infoWarning $infoReport"
+  printf '|'
+  printf "$infoNagios\n$infoLongreport"
+
+}
+
+
+# Test that prerequisites are met
+
+if [ ! -f $sshpass ]; then
+  printf "check_dell_dr requires sshpass to be installed and defined in the script header variables. Please install and check that variable is set.\n"
+  print_help
+  exit $state_unknown
+fi
+
+# Parse command line options
+
+if [ -z "$1" ]; then
+   # Missing arguments
+   print_usage
+   exit $state_unknown
+fi
+
+while [ "$1" ]; do
+   case "$1" in
+       -h | --help)
+           print_help
+           exit $state_ok
+           ;;
+       -V | --version)
+           print_revision
+           exit $state_ok
+           ;;
+       -v | --verbose)
+           : $(( verbosity++ ))
+           shift
+           ;;
+       -H | --host)
+           if [[ -z "$2" || "$2" = -* ]]; then
+               # Host not provided
+               echo "$PROGNAME: Option '$1' requires an argument"
+               print_usage
+               exit $state_unkown
+           else
+               sshhostname=$2
+           fi
+           shift 2
+           ;;
+       -P | --password)
+           if [[ -z "$2" || "$2" = -* ]]; then
+               # Community not provided
+               echo "$PROGNAME: Option '$1' requires an argument"
+               print_usage
+               exit $state_unknown
+           else
+               sshpassword="$2"
+           fi
+           shift 2
+           ;;
+       -T)
+           if [[ -z "$2" || "$2" = -* ]]; then
+               # Community not provided
+               echo "$PROGNAME: Option '$1' requires an argument"
+               print_usage
+               exit $state_unknown
+           else
+               case "$2" in
+                   info)
+                     get_dr_info
+                     exit $exitCode
+                     ;;
+                   hardware)
+                     get_dr_hardware
+                     exit $exitCode
+                     ;;
+                   stats)
+                     get_dr_stats
+                     exit $exitCode
+                     ;;
+                esac
+           fi
+           shift 2
+           ;;
+       -?)
+           print_usage
+           exit $state_ok
+           ;;
+       *)
+           echo "$PROGNAME: Invalid option '$1'"
+           print_usage
+           exit $state_unknown
+           ;;
+   esac
+done
+
+
+# Default action if nothing is selected as test type
+get_dr_info
+exit $exitCode
+
