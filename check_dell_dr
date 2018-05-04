@@ -11,12 +11,26 @@ version="Version 1.0"
 author="(c) 2015-3000 Tomas Stanislawski(tomas.stanislawski@hkr.se)"
 progname=$0
 
-# Exit codes
+# We'll bitwise or results of all checks together to determine maximum severity
+#  0  - OK
+#  1  - Unknown
+#  2  - Warnings
+#  4  - Critical
 state_ok=0
-state_warning=1
-state_critical=2
-state_unknown=3
+state_warning=2
+state_critical=4
+state_unknown=1
 exitCode=$state_ok
+
+# Nagios plugin exit codes
+# ok=0
+# warning=1
+# critical=2
+# unknown=3
+
+# ${return_code[$exitCode]} will map each of the 8 possible exitCode values to the appropriate nagios exit code
+
+return_code=(0 3 1 1 2 2 2 2)
 
 # Status strings
 infoWarning="OK"
@@ -30,7 +44,7 @@ sshpass='/usr/bin/sshpass'
 sshopt1='-p'
 sshpassword=''
 sshhostname=''
-sshopt2='ssh -o ConnectTimeout=10 '
+sshopt2='ssh -o ConnectTimeout=60 '
 
 sshoptions='system --show --config --hardware --storage'
 sshoptionsinfo='system --show --config --storage'
@@ -38,10 +52,11 @@ sshoptionshardware='system --show --hardware --storage'
 sshoptionsstats='stats --system'
 
 # Dell DR variables
-tempWarning="40"
-tempCritical="45"
+#tempWarning="40"
+tempWarning="54"
+tempCritical="55"
 voltLow="100"
-voltHigh="240"
+voltHigh="250"
 usageWarn="95"
 usageCrit="98"
 
@@ -98,6 +113,8 @@ function print_help {
    /bin/cat <<__EOT
 
 Options:
+-v
+   Increase plugin verbosity level
 -h
    Print detailed help screen
 -H
@@ -128,11 +145,12 @@ function get_dr_hardware {
   if [[ -z $queryAll ]]; then
     infoWarning="UNKNOWN"
     infoReport="Query returned a timeout or error"
-    exitCode=$state_unknown
+    let "exitCode|=$state_unknown"
   else
   # Else loop through lines and check them with previously defined regexps
 
     infoWarning="OK No hardware faults detected. See plugin output and graphs for more information."
+    infoWarning=""
     nicCount=0
 
     while read line
@@ -141,10 +159,9 @@ function get_dr_hardware {
         varStoragecontrollertype="${BASH_REMATCH[2]}"
         varStoragecontrollerhealth="${BASH_REMATCH[4]}"
         infoLongreport="$infoLongreport""Storage Controller $varStoragecontrollertype: $varStoragecontrollerhealth\n"
-        if [ "$varStoragecontrollerhealth" != "optimal" ]
-        then
-          exitCode=$state_warning
-          infoWarning="WARNING $varStoragecontrollertype health is $varStoragecontrollerhealth"
+        if [ "$varStoragecontrollerhealth" != "optimal" ]; then
+          let "exitCode|=$state_warning"
+          infoWarning+="WARNING $varStoragecontrollertype health is $varStoragecontrollerhealth "
         fi
       elif [[ $line =~ $re_virtualdisk ]]; then
         varVirtualdiskname="${BASH_REMATCH[8]}"
@@ -152,12 +169,12 @@ function get_dr_hardware {
         varVirtualdiskstate="${BASH_REMATCH[3]}"
         infoLongreport="$infoLongreport""Virtual disk $varVirtualdiskname, state: $varVirtualdiskstate, health: $varVirtualdiskhealth\n"
         if [ "$varVirtualdiskhealth" != "optimal" ]; then
-          exitCode=$state_warning
-          infoWarning="WARNING $varVirtualdiskname health is $varVirtualdiskhealth"
+          let "exitCode|=$state_warning"
+          infoWarning+="WARNING $varVirtualdiskname health is $varVirtualdiskhealth "
         fi
         if [ "$varVirtualdiskstate" != "ready" ]; then
-          exitCode=$state_warning
-          infoWarning="WARNING $varVirtualdiskname state is $varVirtualdiskstate"
+          let "exitCode|=$state_warning"
+          infoWarning+="WARNING $varVirtualdiskname state is $varVirtualdiskstate "
         fi
       elif [[ $line =~ $re_physicaldisk ]]; then
         varPhysicaldiskslot="${BASH_REMATCH[6]}"
@@ -167,13 +184,16 @@ function get_dr_hardware {
         varPhysicaldiskalert="${BASH_REMATCH[8]}"
         varPhysicaldisksize="${BASH_REMATCH[9]}"
         infoLongreport="$infoLongreport""Physical disk $varPhysicaldiskslot, serial: $varPhysicaldiskserial, size: $varPhysicaldisksize, state: $varPhysicaldiskstate, health: $varPhysicaldiskhealth, alert: $varPhysicaldiskalert\n"
-        if [ "$varPhysicaldiskhealth" != "optimal" ]; then
-          exitCode=$state_warning
-          infoWarning="WARNING Disk $varPhysicaldiskslot health is $varPhysicaldiskhealth" 
+        if [ "$varPhysicaldiskhealth" = "failed" ]; then
+          let "exitCode|=$state_critical"
+          infoWarning+="CRITICAL Disk $varPhysicaldiskslot health is $varPhysicaldiskhealth "
+        elif [ "$varPhysicaldiskhealth" != "optimal" ]; then
+          let "exitCode|=$state_warning"
+          infoWarning+="WARNING Disk $varPhysicaldiskslot health is $varPhysicaldiskhealth " 
         fi
         if [[ ! $varPhysicaldiskstate =~ ^(ready|online)$ ]]; then
-          exitCode=$state_warning
-          infoWarning="WARNING Disk $varPhysicaldiskslot state is $varPhysicaldiskstate"
+          let "exitCode|=$state_critical"
+          infoWarning+="CRITICAL Disk $varPhysicaldiskslot state is $varPhysicaldiskstate "
         fi
       elif [[ $line =~ $re_battery ]]; then
         varBatteryname="${BASH_REMATCH[2]}"
@@ -181,28 +201,28 @@ function get_dr_hardware {
         varBatterystate="${BASH_REMATCH[4]}"
         infoLongreport="$infoLongreport""Battery $varBatteryname, state: $varBatterystate, health: $varBatteryhealth\n"
         if [ "$varBatteryhealth" != "optimal" ]; then
-          exitCode=$state_warning
-          infoWarning="WARNING Battery $varBatteryname health is $varBatteryhealth"
+          let "exitCode|=$state_warning"
+          infoWarning=+"WARNING Battery $varBatteryname health is $varBatteryhealth "
         fi
         if [ "$varBatterystate" != "ready" ]; then
-          exitCode=$state_warning
-          infoWarning="WARNING Battery $varBatteryname state is $varBatterystate"
+          let "exitCode|=$state_warning"
+          infoWarning+="WARNING Battery $varBatteryname state is $varBatterystate "
         fi
       elif [[ $line =~ $re_storagecache ]]; then
         varStoragecachename="${BASH_REMATCH[2]}"
         varStoragecachehealth="${BASH_REMATCH[3]}"
         infoLongreport="$infoLongreport""Storage Cache $varStoragecachename, health: $varStoragecachehealth\n"
         if [ "$varStoragecachehealth" != "optimal" ]; then
-          exitCode=$state_warning
-          infoWarning="WARNING Storage Cache $varStoragecachename health is $varStoragecachehealth"
+          let "exitCode|=$state_warning"
+          infoWarning+="WARNING Storage Cache $varStoragecachename health is $varStoragecachehealth "
         fi
       elif [[ $line =~ $re_powersupply ]]; then
         varPowersupplyname="${BASH_REMATCH[2]}"
         varPowersupplyhealth="${BASH_REMATCH[3]}"
         infoLongreport="$infoLongreport""Power Supply $varPowersupplyname, health: $varPowersupplyhealth\n"
         if [ "$varPowersupplyhealth" != "optimal" ]; then
-          exitCode=$state_warning
-          infoWarning="WARNING Power Supply $varPowersupplyname health is $varPowersupplyhealth"
+          let "exitCode|=$state_warning"
+          infoWarning+="WARNING Power Supply $varPowersupplyname health is $varPowersupplyhealth "
         fi
       elif [[ $line =~ $re_temperature ]]; then
         varTemperaturename="${BASH_REMATCH[2]}"
@@ -211,16 +231,16 @@ function get_dr_hardware {
         infoLongreport="$infoLongreport""Temperature Probe $varTemperaturename, health: $varTemperaturehealth, reading: $varTemperaturevalue\n"
         infoNagios="$infoNagios""'Temperature probe $varTemperaturename'=$varTemperaturevalue;$tempWarning;$tempCritical "
         if [ "$varTemperaturehealth" != "optimal" ]; then
-          exitCode=$state_warning
-          infoWarning="WARNING Temperature Probe $varTemperaturename health is $varTemperaturehealth"
+          let "exitCode|=$state_warning"
+          infoWarning+="WARNING Temperature Probe $varTemperaturename health is $varTemperaturehealth "
         fi
         if [[ $(echo "($varTemperaturevalue*10)/1" | bc) -ge $(echo "($tempWarning*10)/1" | bc) ]]; then
-          exitCode=$state_warning
-          infoWarning="WARNING Temperature Probe $varTemperaturename reading is $varTemperaturevalue"
+          let "exitCode|=$state_warning"
+          infoWarning+="WARNING Temperature Probe $varTemperaturename reading is $varTemperaturevalue "
         fi
         if [[ $(echo "($varTemperaturevalue*10)/1" | bc) -ge $(echo "($tempCritical*10)/1" | bc) ]]; then
-          exitCode=$state_critical
-          infoWarning="CRITICAL Temperature Probe $varTemperaturename reading is $varTemperaturevalue"
+          let "exitCode|=$state_critical"
+          infoWarning+="CRITICAL Temperature Probe $varTemperaturename reading is $varTemperaturevalue "
         fi
       elif [[ $line =~ $re_voltage ]]; then
         varVoltagename="${BASH_REMATCH[5]}"
@@ -231,25 +251,25 @@ function get_dr_hardware {
           infoLongreport="$infoLongreport""$varVoltagename, health: $varVoltagehealth, reading: $varVoltagevalue\n"
           infoNagios="$infoNagios""'$varVoltagename'=$varVoltagevalue;$voltLow:$voltHigh; "
           if [[ $(echo "($varVoltagevalue*100)/1" | bc) -lt $(echo "($voltLow*100)/1" | bc) ]]; then
-            exitCode=$state_warning
-            infoWarning="WARNING $varVoltagename reading is $varVoltagevalue"
+            let "exitCode|=$state_warning"
+            infoWarning+="WARNING $varVoltagename reading is $varVoltagevalue "
           fi
           if [[ $(echo "($varVoltagevalue*100)/1" | bc) -ge $(echo "($voltHigh*100)/1" | bc) ]]; then
-            exitCode=$state_warning
-            infoWarning="WARNING $varVoltagename reading is $varVoltagevalue"
+            let "exitCode|=$state_warning"
+            infoWarning+="WARNING $varVoltagename reading is $varVoltagevalue "
           fi
         fi
         if [ "$varVoltagehealth" != "optimal" ]; then
-          exitCode=$state_warning
-          infoWarning="WARNING Voltage Probe $varVoltagename health is $varVoltagehealth"
+          let "exitCode|=$state_warning"
+          infoWarning+="WARNING Voltage Probe $varVoltagename health is $varVoltagehealth "
         fi
       elif [[ $line =~ $re_srvhwcontroller ]]; then
         varControllername="${BASH_REMATCH[2]}"
         varControllerhealth="${BASH_REMATCH[3]}"
         infoLongreport="$infoLongreport""Storage Controller $varControllername, health: $varControllerhealth\n"
         if [ "$varControllerhealth" != "optimal" ]; then
-          exitCode=$state_warning
-          infoWarning="WARNING Storage Controller $varControllername health is $varControllerhealth"
+          let "exitCode|=$state_warning"
+          infoWarning+="WARNING Storage Controller $varControllername health is $varControllerhealth "
         fi
       elif [[ $line =~ $re_nic ]]; then
         varNicname="${BASH_REMATCH[2]}"
@@ -264,24 +284,24 @@ function get_dr_hardware {
         infoLongreport="$infoLongreport""$varFanname, health: $varFanhealth, speed: $varFanspeed\n"
         infoNagios="$infoNagios""'$varFanname'=$varFanspeed;; "
         if [ "$varFanhealth" != "optimal" ]; then
-          exitCode=$state_warning
-          infoWarning="WARNING Fan $varFanname health is $varFanhealth"
+          let "exitCode|=$state_warning"
+          infoWarning+="WARNING Fan $varFanname health is $varFanhealth "
         fi
       elif [[ $line =~ $re_cpu ]]; then
         varCpuname="${BASH_REMATCH[2]}"
         varCpuhealth="${BASH_REMATCH[3]}"
         infoLongreport="$infoLongreport""CPU $varCpuname, health: $varCpuhealth\n"
         if [ "$varCpuhealth" != "optimal" ]; then
-          exitCode=$state_warning
-          infoWarning="WARNING CPU $varCpuname health is $varCpuhealth"
+          let "exitCode|=$state_warning"
+          infoWarning+="WARNING CPU $varCpuname health is $varCpuhealth "
         fi
       elif [[ $line =~ $re_dimm ]]; then
         varDimmname="${BASH_REMATCH[4]}"
         varDimmhealth="${BASH_REMATCH[3]}"
         infoLongreport="$infoLongreport""DIMM $varDimmname, health: $varDimmhealth\n"
         if [ "$varDimmhealth" != "optimal" ]; then
-          exitCode=$state_warning
-          infoWarning="WARNING DIMM $varDimmname health is $varDimmhealth"
+          let "exitCode|=$state_warning"
+          infoWarning+="WARNING DIMM $varDimmname health is $varDimmhealth "
         fi
       elif [[ $line =~ $re_nvram ]]; then
         varNvramtemp="${BASH_REMATCH[5]}"
@@ -292,12 +312,12 @@ function get_dr_hardware {
         infoNagios="$infoNagios""'NVRAM errors'=$varNvramerrors;; 'NVRAM temperature'=$varNvramtemp;; "
         infoLongreport="$infoLongreport""NVRAM health: $varNvramhealth, errors: $varNvramerrors, temperature: $varNvramtemp\nNVRAM SSD health: $varSsdhealth, state: $varSsdstate\n"
         if [ "$varNvramhealth" != "optimal" ]; then
-          exitCode=$state_warning
-          infoWarning="WARNING NVRAM health is $varNvramhealth"
+          let "exitCode|=$state_warning"
+          infoWarning+="WARNING NVRAM health is $varNvramhealth "
         fi
         if [ "$varSsdhealth" != "optimal" ]; then
-          exitCode=$state_warning
-          infoWarning="WARNING NVRAM SSD health is $varSsdhealth"
+          let "exitCode|=$state_warning"
+          infoWarning+="WARNING NVRAM SSD health is $varSsdhealth "
         fi
       elif [[ $line =~ $re_version ]]; then
         varVersion="${BASH_REMATCH[2]}"
@@ -305,11 +325,13 @@ function get_dr_hardware {
     done <<< "$(echo -e "$queryAll" | tr -d '"' | tr -d '%')"
 
     if [ $nicCount -lt 2 ]; then
-      exitCode=$state_warning
-      infoWarning="WARNING Network redudancy lost, active links $nicCount"
+      let "exitCode|=$state_warning"
+      infoWarning+="WARNING Network redudancy lost, active links $nicCount "
     fi
     # Check if any errors found and set states accordingly
-
+    if [ $exitCode -eq $state_ok ]; then
+        infoWarning="OK No hardware faults detected."
+    fi
     #infoReport="$infoReport""System: $varSystemname $varProductname Version $varVersion, SN: $varServicetag, State: $varSystemstate, Storage: $varStorintsize $varStorintstate, used $varStorintusedpct%%"
     #infoNagios="'Size MB'=$varStorintsizembytes""MB;;; 'Used MB'=$varStorintusedmbytes""MB;;; 'Used percent'=$varStorintusedpct%%"
     #infoLongreport="System: $varSystemname\nProduct: $varProductname\nService tag: $varServicetag\nState: $varSystemstate, $varReason\n"
@@ -317,8 +339,10 @@ function get_dr_hardware {
 
   printf "$infoWarning $infoReport"
   printf '|'
-  printf "$infoNagios\n$infoLongreport"
-
+  printf "$infoNagios\n"
+  if [ $verbosity -gt 0 ]; then
+    printf "$infoLongreport\n"
+  fi
 }
 
 function get_dr_info {
@@ -330,7 +354,7 @@ function get_dr_info {
   if [[ -z $queryAll ]]; then
     infoWarning="UNKNOWN"
     infoReport="Query returned a timeout or error"
-    exitCode=$state_unknown
+    let "exitCode|=$state_unknown"
   else
   # Else loop through lines and check them with previously defined regexps 
     while read line
@@ -355,15 +379,15 @@ function get_dr_info {
         varTmp1=$(echo "$varStorintsize" | sed -e 's/[[:blank:]][TB]iB//g')
         varStorintsizembytes=$(echo "$varTmp1*1024*1024" | bc)
         varStorintusedmbytes=$(echo "($varTmp1*1024*1024*$varStorintusedpct)/100" | bc)
-        if [ "$varStorintstate" != "ready" ]; then exitCode=$state_warning; infoWarning="WARNING Internal storage is not ready."; fi
+        if [ "$varStorintstate" != "ready" ]; then let "exitCode|=$state_warning"; infoWarning+="WARNING Internal storage is not ready. "; fi
       elif [[ $line =~ $re_version ]]; then
         varVersion="${BASH_REMATCH[2]}"
       fi
     done <<< "$(echo -e "$queryAll" | tr -d '"' | tr -d '%')"
 
     # Check if any errors found and set states accordingly
-    if [ "$varSystemstate" != "Operational Mode" ]; then exitCode=$STATE_WARNING; infoWarning="WARNING System state is not in operational mode. Reason: $varReason"; fi
-    if [ "$varStorbootstate" != "ready" ]; then exitCode=$state_warning; infoWarning="WARNING Boot storage is not ready."; fi
+    if [ "$varSystemstate" != "Operational Mode" ]; then let "exitCode|=$STATE_WARNING"; infoWarning+="WARNING System state is not in operational mode. Reason: $varReason "; fi
+    if [ "$varStorbootstate" != "ready" ]; then let "exitCode|=$state_warning"; infoWarning+="WARNING Boot storage is not ready. "; fi
 
     infoReport="$infoReport""System: $varSystemname $varProductname Version $varVersion, SN: $varServicetag, State: $varSystemstate, Storage: $varStorintsize $varStorintstate, used $varStorintusedpct%%"
     infoNagios="'Size MB'=$varStorintsizembytes""MB;;; 'Used MB'=$varStorintusedmbytes""MB;;; 'Used percent'=$varStorintusedpct%%"
@@ -372,8 +396,10 @@ function get_dr_info {
   
   printf "$infoWarning $infoReport"
   printf '|'
-  printf "$infoNagios\n$infoLongreport"
-
+  printf "$infoNagios\n"
+  if [ $verbosity -gt 0 ]; then
+    printf "$infoLongreport\n"
+  fi
 }
 
 function get_dr_stats {
@@ -385,7 +411,7 @@ function get_dr_stats {
   if [[ -z $queryAll ]]; then
     infoWarning="UNKNOWN"
     infoReport="Query returned a timeout or error"
-    exitCode=$state_unknown
+    let "exitCode|=$state_unknown"
   else
   # Else loop through lines and check them with previously defined regexps
     while read line
@@ -411,12 +437,12 @@ function get_dr_stats {
     varTotalcapacity=$(echo "$varCapacityfree+$varCapacityused" | bc)
     varUsagepct=$(echo "scale=2;(100-($varCapacityfree*100/$varTotalcapacity))" | bc -l)
     if [[ $(echo "($varUsagepct*10)/1" | bc) -ge $(echo "($usageWarn*10)/1" | bc) ]]; then
-      exitCode=$state_warning
-      infoWarning="WARNING Storage usage is $varUsagepct%%"
+      let "exitCode|=$state_warning"
+      infoWarning+="WARNING Storage usage is $varUsagepct%% "
     fi
     if [[ $(echo "($varUsagepct*10)/1" | bc) -ge $(echo "($usageCrit*10)/1" | bc) ]]; then
-      exitCode=$state_critical
-      infoWarning="CRITICAL Storage usage is $varUsagepct%%"
+      let "exitCode|=$state_critical"
+      infoWarning+="CRITICAL Storage usage is $varUsagepct%% "
     fi
 
     infoReport="$infoReport""Disk total: $varTotalcapacity GB, Disk used: $varCapacityused GB, Disk free: $varCapacityfree GB, Usage: $varUsagepct%%, Active bytes: $varCurrentbytes GB, Total savings: $varTotalsavings%%"
@@ -426,10 +452,11 @@ function get_dr_stats {
 
   printf "$infoWarning $infoReport"
   printf '|'
-  printf "$infoNagios\n$infoLongreport"
-
+  printf "$infoNagios\n"
+  if [ $verbosity -gt 0 ]; then
+    printf "$infoLongreport\n"
+  fi
 }
-
 
 # Test that prerequisites are met
 
@@ -493,15 +520,15 @@ while [ "$1" ]; do
                case "$2" in
                    info)
                      get_dr_info
-                     exit $exitCode
+                     exit ${return_code[$exitCode]}
                      ;;
                    hardware)
                      get_dr_hardware
-                     exit $exitCode
+                     exit ${return_code[$exitCode]}
                      ;;
                    stats)
                      get_dr_stats
-                     exit $exitCode
+                     exit ${return_code[$$exitCode]}
                      ;;
                 esac
            fi
@@ -523,4 +550,3 @@ done
 # Default action if nothing is selected as test type
 get_dr_info
 exit $exitCode
-
