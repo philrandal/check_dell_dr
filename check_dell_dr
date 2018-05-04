@@ -446,7 +446,7 @@ function get_dr_stats {
     fi
 
     infoReport="$infoReport""Disk total: $varTotalcapacity GB, Disk used: $varCapacityused GB, Disk free: $varCapacityfree GB, Usage: $varUsagepct%%, Active bytes: $varCurrentbytes GB, Total savings: $varTotalsavings%%"
-    infoNagios="'Disk used (GB)'=$varCapacityused;; 'Disk free (GB)'=$varCapacityfree;; 'Usage'=$varUsagepct%%;$usageWarn;$usageCrit 'Active bytes (GB)'=$varCurrentbytes;; 'Total savings'=$varTotalsavings%%;; 'Read throuhgput (MB/s)'=$varReadth;; 'Write throughput (MB/s)'=$varWriteth;;"
+    infoNagios="'Disk used (GB)'=$varCapacityused;; 'Disk free (GB)'=$varCapacityfree;; 'Usage'=$varUsagepct%%;$usageWarn;$usageCrit 'Active bytes (GB)'=$varCurrentbytes;; 'Total savings'=$varTotalsavings%%;; 'Read throughput (MB/s)'=$varReadth;; 'Write throughput (MB/s)'=$varWriteth;;"
     infoLongreport="Disk used: $varCapacityused GB\nDisk free: $varCapacityfree GB\nActive bytes: $varCurrentbytes GB\nTotal savings: $varTotalsavings%%\nRead throuhgput: $varReadth MB/s\nWrite throughput: $varWriteth MB/s\n"
   fi
 
