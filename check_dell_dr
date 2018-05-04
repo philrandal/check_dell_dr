@@ -528,7 +528,7 @@ while [ "$1" ]; do
                      ;;
                    stats)
                      get_dr_stats
-                     exit ${return_code[$$exitCode]}
+                     exit ${return_code[$exitCode]}
                      ;;
                 esac
            fi
