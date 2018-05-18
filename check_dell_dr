@@ -186,14 +186,14 @@ function get_dr_hardware {
         infoLongreport="$infoLongreport""Physical disk $varPhysicaldiskslot, serial: $varPhysicaldiskserial, size: $varPhysicaldisksize, state: $varPhysicaldiskstate, health: $varPhysicaldiskhealth, alert: $varPhysicaldiskalert\n"
         if [ "$varPhysicaldiskhealth" = "failed" ]; then
           let "exitCode|=$state_critical"
-          infoWarning+="CRITICAL Disk $varPhysicaldiskslot health is $varPhysicaldiskhealth "
+          infoWarning+="CRITICAL Disk $varPhysicaldiskslot Serial $varPhysicaldiskserial health is $varPhysicaldiskhealth "
         elif [ "$varPhysicaldiskhealth" != "optimal" ]; then
           let "exitCode|=$state_warning"
-          infoWarning+="WARNING Disk $varPhysicaldiskslot health is $varPhysicaldiskhealth " 
+          infoWarning+="WARNING Disk $varPhysicaldiskslot Serial $varPhysicaldiskserial health is $varPhysicaldiskhealth " 
         fi
         if [[ ! $varPhysicaldiskstate =~ ^(ready|online)$ ]]; then
           let "exitCode|=$state_critical"
-          infoWarning+="CRITICAL Disk $varPhysicaldiskslot state is $varPhysicaldiskstate "
+          infoWarning+="CRITICAL Disk $varPhysicaldiskslot Serial $varPhysicaldiskserial state is $varPhysicaldiskstate "
         fi
       elif [[ $line =~ $re_battery ]]; then
         varBatteryname="${BASH_REMATCH[2]}"
