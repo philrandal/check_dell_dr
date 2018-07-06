@@ -204,7 +204,7 @@ function get_dr_hardware {
           let "exitCode|=$state_warning"
           infoWarning=+"WARNING Battery $varBatteryname health is $varBatteryhealth "
         fi
-        if [ "$varBatterystate" != "ready" ]; then
+        if [ "$varBatterystate" != "ready" ] && [ "$varBatterystate" != "charging" ]; then
           let "exitCode|=$state_warning"
           infoWarning+="WARNING Battery $varBatteryname state is $varBatterystate "
         fi
