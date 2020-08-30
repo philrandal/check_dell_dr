@@ -337,7 +337,7 @@ function get_dr_hardware {
     #infoLongreport="System: $varSystemname\nProduct: $varProductname\nService tag: $varServicetag\nState: $varSystemstate, $varReason\n"
   fi
 
-  if [ -z $infoWarning ]; then
+  if [ -z "$infoWarning" ]; then
     infoWarning="OK -"
   fi
   printf "$infoWarning $infoReport"
@@ -397,7 +397,7 @@ function get_dr_info {
     infoLongreport="System: $varSystemname\nProduct: $varProductname\nService tag: $varServicetag\nState: $varSystemstate, $varReason\n" 
   fi
   
-  if [ -z $infoWarning ]; then
+  if [ -z "$infoWarning" ]; then
     infoWarning="OK -"
   fi
   printf "$infoWarning $infoReport"
@@ -456,7 +456,7 @@ function get_dr_stats {
     infoLongreport="Disk used: $varCapacityused GB\nDisk free: $varCapacityfree GB\nActive bytes: $varCurrentbytes GB\nTotal savings: $varTotalsavings%%\nRead throughput: $varReadth MB/s\nWrite throughput: $varWriteth MB/s\n"
   fi
 
-  if [ -z $infoWarning ]; then
+  if [ -z "$infoWarning" ]; then
     infoWarning="OK -"
   fi
   printf "$infoWarning $infoReport"
