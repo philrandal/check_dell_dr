@@ -1,5 +1,10 @@
 Changes from original Nagios Exchange version:
 
+2020-08-30:
+
+Fix output format.  No more "OKWARNING" output.
+Output "OK -", "WARNING -", etc instead of "OK", "WARNING" to bring in line with other plugins' outputs.
+
 2018-05-04:
 
 1: Fix a few typos
