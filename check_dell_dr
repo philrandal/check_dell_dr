@@ -6,6 +6,8 @@
 # Requires: sshpass                                                            #
 ################################################################################
 
+export LC_ALL="C"
+
 # Constants
 version="Version 1.0"
 author="(c) 2015-3000 Tomas Stanislawski(tomas.stanislawski@hkr.se)"
